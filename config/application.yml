@@ -1,0 +1,5 @@
+export USERNAME= zaykos
+export PASSWORD= root
+export PORT= 5433
+export HOST= localhost
+export DATABASE= storedb

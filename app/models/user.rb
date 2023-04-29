@@ -1,0 +1,102 @@
+# frozen_string_literal: true
+
+# The User class includes modules for email confirmation and downcasing, has secure password
+# functionality, validates email presence and uniqueness, and generates a confirmation token with a
+# set expiration time.
+class User < ApplicationRecord
+  include Confirmable
+  include EmailDowncaser
+  include Mailer
+
+  has_secure_password
+
+  before_save :downcase_email
+
+  validates :email, presence: true, uniqueness: true, email: { strict_mode: true }
+
+  def generate_confirmation_token
+    signed_id expires_in: CONFIRMATION_TOKEN_EXPIRATION, purpose: :confirm_email
+  end
+end
+
+# Module for adding confirmation functionality to a model
+module Confirmable
+  CONFIRMATION_TOKEN_EXPIRATION = 10.minutes
+
+  def confirm!
+    if unconfirmed_or_reconfirming?
+      if unconfirmed_email.present?
+        return false unless update(email: unconfirmed_email, unconfirmed_email: nil)
+      end
+      update_columns(confirmed_at: Time.current)
+    else
+      false
+    end
+  end
+
+  def confirmable_email
+    if unconfirmed_email.present?
+      unconfirmed_email
+    else
+      email
+    end
+  end
+
+  def reconfirming?
+    unconfirmed_email.present?
+  end
+
+  def unconfirmed_or_reconfirming?
+    unconfirmed? || reconfirming?
+  end
+
+  def confirmed?
+    confirmed_at.present?
+  end
+
+  def unconfirmed?
+    !confirmed?
+  end
+
+  private
+
+  def downcase_unconfirmed_email
+    return if unconfirmed_email.nil?
+
+    self.unconfirmed_email = unconfirmed_email.downcase
+  end
+end
+
+# Module for password
+module PasswordReset
+  PASSWORD_RESET_TOKEN_EXPIRATION = 10.minutes
+
+  def generate_password_reset_token
+    signed_id expires_in: PASSWORD_RESET_TOKEN_EXPIRATION, purpose: :reset_password
+  end
+
+  def send_password_reset_email!
+    password_reset_token = generate_password_reset_token
+    UserMailer.password_reset(self, password_reset_token).deliver_now
+  end
+
+end
+
+# Module for downcasing email before saving
+module EmailDowncaser
+  extend ActiveSupport::Concern
+
+  included do
+    before_save { email.downcase! }
+  end
+end
+
+# Module for mailer
+module Mailer
+  MAILER_FROM_EMAIL = 'no-reply@example.com'
+
+  def send_confirmation_email!
+    confirmation_token = generate_confirmation_token
+    UserMailer.confirmation(self, confirmation_token).deliver_now
+  end
+end
