@@ -1,11 +1,14 @@
+# frozen_string_literal: true
+
 class UsersController < ApplicationController
-  before_action :redirect_if_authenticated, only: %i[create, new]
+  before_action :authenticate_user!, only: %i[edit destroy update]
+  before_action :redirect_if_authenticated, only: %i[create new]
 
   def create
-    @user = User.new(user_params)
+    @user = User.new(create_user_params)
     if @user.save
       @user.send_confirmation_email!
-      redirect_to root_path, notice: 'Please check your for confirmation instructions. '
+      redirect_to root_path, notice: 'Please check your email for confirmation instructions.'
     else
       render :new, status: :unprocessable_entity
     end
@@ -14,38 +17,48 @@ class UsersController < ApplicationController
   def destroy
     current_user.destroy
     reset_session
-    redirect_to root_path, notice: 'Your account has been deleted. '
+    redirect_to root_path, notice: 'Your account has been deleted.'
   end
 
   def edit
     @user = current_user
+    @active_sessions = active_sessions
+  end
+
+  def new
+    @user = User.new
   end
 
   def update
     @user = current_user
     if @user.authenticate(params[:user][:current_password])
       if @user.update(update_user_params)
-        @user.send_confirmation_email!
-        redirect_to root_path, notice: 'Check your email for confirmation instructions. '
+        if params[:user][:unconfirmed_email].present?
+          @user.send_confirmation_email!
+          redirect_to root_path, notice: 'Check your email for confirmation instructions.'
+        else
+          redirect_to root_path, notice: 'Account updated.'
+        end
       else
-        re  direct_to root_path, notice: 'Account updated. '
+        render :edit, status: :unprocessable_entity
       end
     else
+      flash.now[:error] = 'Incorrect password'
       render :edit, status: :unprocessable_entity
     end
-  else
-    flash.now[:error] = 'Incorrect password'
-    render :edit, status: :unprocessable_entity
   end
-end
 
-def new
-  @user = User.new
-end
+  private
 
-private
+  def create_user_params
+    params.require(:user).permit(:email, :password, :password_confirmation)
+  end
 
-def user_params
-  params.require(:user).permit(:email, :password, :password_confirmation)
-end
+  def update_user_params
+    params.require(:user).permit(:current_password, :password, :password_confirmation, :unconfirmed_email)
+  end
+
+  def active_sessions
+    current_user.active_sessions.order(created_at: :desc)
+  end
 end

@@ -1,78 +1,68 @@
 # frozen_string_literal: true
 
-# The User class includes modules for email confirmation and downcasing, has secure password
-# functionality, validates email presence and uniqueness, and generates a confirmation token with a
-# set expiration time.
 class User < ApplicationRecord
-  include Confirmable
-  include EmailDowncaser
-  include Mailer
+  CONFIRMATION_TOKEN_EXPIRATION = 10.minutes
+  MAILER_FROM_EMAIL = 'no-reply@example.com'
+  PASSWORD_RESET_TOKEN_EXPIRATION = 10.minutes
+
+  attr_accessor :current_password
 
   has_secure_password
 
+  has_many :active_sessions, dependent: :destroy
+
   before_save :downcase_email
+  before_save :downcase_unconfirmed_email
 
-  validates :email, presence: true, uniqueness: true, email: { strict_mode: true }
+  validates :email, format: { with: URI::MailTo::EMAIL_REGEXP }, presence: true, uniqueness: true
+  validates :unconfirmed_email, format: { with: URI::MailTo::EMAIL_REGEXP, allow_blank: true }
 
-  def generate_confirmation_token
-    signed_id expires_in: CONFIRMATION_TOKEN_EXPIRATION, purpose: :confirm_email
+  # @return [User, nil]
+  def self.authenticate_by(attributes)
+    passwords, identifiers = attributes.to_h.partition do |name, _value|
+      !has_attribute?(name) && has_attribute?("#{name}_digest")
+    end.map(&:to_h)
+
+    raise ArgumentError, 'One or more password arguments are required' if passwords.empty?
+    raise ArgumentError, 'One or more finder arguments are required' if identifiers.empty?
+
+    record = find_by(identifiers)
+    return nil unless record
+
+    if passwords.count { |name, value| record.public_send(:"authenticate_#{name}", value) } == passwords.size
+      record
+    end
   end
-end
-
-# Module for adding confirmation functionality to a model
-module Confirmable
-  CONFIRMATION_TOKEN_EXPIRATION = 10.minutes
 
   def confirm!
-    if unconfirmed_or_reconfirming?
-      if unconfirmed_email.present?
-        return false unless update(email: unconfirmed_email, unconfirmed_email: nil)
-      end
-      update_columns(confirmed_at: Time.current)
+    return false unless unconfirmed_or_reconfirming?
+
+    if update(email: unconfirmed_email, unconfirmed_email: nil, confirmed_at: Time.current)
+      true
     else
       false
     end
-  end
-
-  def confirmable_email
-    if unconfirmed_email.present?
-      unconfirmed_email
-    else
-      email
-    end
-  end
-
-  def reconfirming?
-    unconfirmed_email.present?
-  end
-
-  def unconfirmed_or_reconfirming?
-    unconfirmed? || reconfirming?
   end
 
   def confirmed?
     confirmed_at.present?
   end
 
-  def unconfirmed?
-    !confirmed?
+  def confirmable_email
+    unconfirmed_email.presence || email
   end
 
-  private
-
-  def downcase_unconfirmed_email
-    return if unconfirmed_email.nil?
-
-    self.unconfirmed_email = unconfirmed_email.downcase
+  def generate_confirmation_token
+    signed_id expires_in: CONFIRMATION_TOKEN_EXPIRATION, purpose: :confirm_email
   end
-end
-
-# Module for password
-module PasswordReset
-  PASSWORD_RESET_TOKEN_EXPIRATION = 10.minutes
 
   def generate_password_reset_token
     signed_id expires_in: PASSWORD_RESET_TOKEN_EXPIRATION, purpose: :reset_password
+  end
+
+  def send_confirmation_email!
+    confirmation_token = generate_confirmation_token
+    UserMailer.confirmation(self, confirmation_token).deliver_now
   end
 
   def send_password_reset_email!
@@ -80,23 +70,27 @@ module PasswordReset
     UserMailer.password_reset(self, password_reset_token).deliver_now
   end
 
-end
-
-# Module for downcasing email before saving
-module EmailDowncaser
-  extend ActiveSupport::Concern
-
-  included do
-    before_save { email.downcase! }
+  def reconfirming?
+    unconfirmed_email.present?
   end
-end
 
-# Module for mailer
-module Mailer
-  MAILER_FROM_EMAIL = 'no-reply@example.com'
+  def unconfirmed?
+    !confirmed?
+  end
 
-  def send_confirmation_email!
-    confirmation_token = generate_confirmation_token
-    UserMailer.confirmation(self, confirmation_token).deliver_now
+  def unconfirmed_or_reconfirming?
+    unconfirmed? || reconfirming?
+  end
+
+  private
+
+  def downcase_email
+    self.email = email.downcase
+  end
+
+  def downcase_unconfirmed_email
+    return if unconfirmed_email.nil?
+
+    self.unconfirmed_email = unconfirmed_email.downcase
   end
 end
